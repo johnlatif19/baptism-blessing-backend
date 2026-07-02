@@ -28,8 +28,8 @@ faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 let faceDetectionModelLoaded = false;
 
 // Face match threshold - easy to adjust
-const FACE_MATCH_THRESHOLD = 0.40; // Lower = more strict matching
-
+const FACE_MATCH_THRESHOLD =
+Number(process.env.FACE_MATCH_THRESHOLD || 0.40);
 // Load face detection models on startup
 async function loadFaceModels() {
     try {
