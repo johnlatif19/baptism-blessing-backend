@@ -31,18 +31,17 @@ let faceDetectionModelLoaded = false;
 // Load face detection models on startup
 async function loadFaceModels() {
     try {
-        console.log('🔄 Loading face detection models...');
+        console.log('🔄 Loading face detection models from CDN...');
         
-        // ✅ استخدام المسار المطلق بدل النسبي
-        const modelsPath = path.join(__dirname, 'models');
-        console.log(`📂 Models path: ${modelsPath}`);
+        // ✅ استخدام CDN بدل الملفات المحلية
+        const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model';
         
-        await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelsPath);
-        await faceapi.nets.faceLandmark68Net.loadFromDisk(modelsPath);
-        await faceapi.nets.faceRecognitionNet.loadFromDisk(modelsPath);
+        await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
+        await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+        await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
         
         faceDetectionModelLoaded = true;
-        console.log('✅ Face detection models loaded successfully');
+        console.log('✅ Face detection models loaded successfully from CDN');
     } catch (error) {
         console.error('❌ Failed to load face detection models:', error.message);
         console.log('⚠️ Face recognition features will be disabled');
