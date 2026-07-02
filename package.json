@@ -9,6 +9,8 @@
     "postinstall": "node scripts/download-models.js"
   },
   "dependencies": {
+    "@tensorflow/tfjs-node": "^4.20.0",
+    "@tensorflow/tfjs-core": "^4.20.0",
     "@vladmandic/face-api": "^1.7.12",
     "bcryptjs": "^2.4.3",
     "canvas": "^2.11.2",
