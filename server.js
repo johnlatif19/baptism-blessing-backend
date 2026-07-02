@@ -1,3 +1,8 @@
+// ==================== TENSORFLOW SETUP ====================
+// ✅ لازم يكون قبل face-api
+const tf = require('@tensorflow/tfjs-node');
+console.log(`🧠 TensorFlow.js version: ${tf.version_core}`);
+
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -60,21 +65,32 @@ const requiredEnvVars = [
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
 if (missingEnvVars.length > 0) {
   console.error(`❌ Missing required environment variables: ${missingEnvVars.join(', ')}`);
+  console.error('Please check your environment variables on Railway');
+  process.exit(1);
+}
+
+// Initialize Firebase Admin from FIREBASE_CONFIG environment variable
+let firebaseConfig;
+try {
+  // FIREBASE_CONFIG is the JSON service account key
+  firebaseConfig = JSON.parse(process.env.FIREBASE_CONFIG);
+  console.log('✅ Firebase config loaded successfully');
+} catch (error) {
+  console.error('❌ Invalid FIREBASE_CONFIG JSON format:', error.message);
+  console.error('Make sure FIREBASE_CONFIG contains the full JSON service account key');
   process.exit(1);
 }
 
 // Initialize Firebase Admin
-let firebaseConfig;
 try {
-  firebaseConfig = JSON.parse(process.env.FIREBASE_CONFIG);
+  admin.initializeApp({
+    credential: admin.credential.cert(firebaseConfig)
+  });
+  console.log('✅ Firebase Admin initialized successfully');
 } catch (error) {
-  console.error('❌ Invalid FIREBASE_CONFIG JSON format:', error.message);
+  console.error('❌ Failed to initialize Firebase Admin:', error.message);
   process.exit(1);
 }
-
-admin.initializeApp({
-  credential: admin.credential.cert(firebaseConfig)
-});
 
 const db = admin.firestore();
 
@@ -84,6 +100,7 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
+console.log('✅ Cloudinary configured successfully');
 
 // ==================== EXPRESS APP ====================
 
@@ -240,7 +257,8 @@ app.get('/api/health', (req, res) => {
     status: 'OK', 
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
-    faceRecognition: faceDetectionModelLoaded ? 'enabled' : 'disabled'
+    faceRecognition: faceDetectionModelLoaded ? 'enabled' : 'disabled',
+    tensorflow: tf.version_core || 'unknown'
   });
 });
 
@@ -628,6 +646,7 @@ loadFaceModels().then(() => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
     console.log(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🧠 Face Recognition: ${faceDetectionModelLoaded ? '✅ Enabled' : '❌ Disabled'}`);
+    console.log(`🧮 TensorFlow: ${tf.version_core || 'unknown'}`);
     console.log('=================================');
     console.log('📹 Video upload limit: 500MB');
     console.log('=================================');
