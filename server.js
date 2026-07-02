@@ -27,9 +27,15 @@ let faceDetectionModelLoaded = false;
 async function loadFaceModels() {
     try {
         console.log('🔄 Loading face detection models...');
-        await faceapi.nets.ssdMobilenetv1.loadFromDisk('./models');
-        await faceapi.nets.faceLandmark68Net.loadFromDisk('./models');
-        await faceapi.nets.faceRecognitionNet.loadFromDisk('./models');
+        
+        // ✅ استخدام المسار المطلق بدل النسبي
+        const modelsPath = path.join(__dirname, 'models');
+        console.log(`📂 Models path: ${modelsPath}`);
+        
+        await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelsPath);
+        await faceapi.nets.faceLandmark68Net.loadFromDisk(modelsPath);
+        await faceapi.nets.faceRecognitionNet.loadFromDisk(modelsPath);
+        
         faceDetectionModelLoaded = true;
         console.log('✅ Face detection models loaded successfully');
     } catch (error) {
