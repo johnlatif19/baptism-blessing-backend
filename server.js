@@ -1,5 +1,4 @@
 // ==================== TENSORFLOW SETUP ====================
-// ✅ لازم يكون قبل face-api
 const tf = require('@tensorflow/tfjs-node');
 console.log(`🧠 TensorFlow.js version: ${tf.version_core}`);
 
@@ -27,6 +26,9 @@ const { Canvas, Image, ImageData } = canvas;
 faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 
 let faceDetectionModelLoaded = false;
+
+// Face match threshold - easy to adjust
+const FACE_MATCH_THRESHOLD = 0.40; // Lower = more strict matching
 
 // Load face detection models on startup
 async function loadFaceModels() {
@@ -125,7 +127,6 @@ app.use(helmet({
 }));
 
 // CORS
-// CORS - عدل القسم ده
 app.use(cors({
   origin: function (origin, callback) {
     const allowedOrigins = [
@@ -236,7 +237,11 @@ const authenticateToken = (req, res, next) => {
 
 // ==================== FACE RECOGNITION HELPER FUNCTIONS ====================
 
-async function extractFaceDescriptor(imageBuffer) {
+/**
+ * Extract all face descriptors from an image
+ * Uses detectAllFaces to handle multiple faces
+ */
+async function extractAllFaceDescriptors(imageBuffer) {
     if (!faceDetectionModelLoaded) {
         throw new Error('Face detection models not loaded');
     }
@@ -245,28 +250,82 @@ async function extractFaceDescriptor(imageBuffer) {
         const img = new Image();
         img.src = imageBuffer;
         
-        const detections = await faceapi.detectSingleFace(img)
+        const detections = await faceapi.detectAllFaces(img)
             .withFaceLandmarks()
-            .withFaceDescriptor();
+            .withFaceDescriptors();
 
-        if (!detections) {
-            throw new Error('No face detected in the image');
+        if (!detections || detections.length === 0) {
+            return { descriptors: [], count: 0 };
         }
 
-        return Array.from(detections.descriptor);
+        const descriptors = detections.map(det => Array.from(det.descriptor));
+        return { descriptors, count: detections.length };
     } catch (error) {
         throw new Error(`Face detection failed: ${error.message}`);
     }
 }
 
-function compareFaces(descriptor1, descriptor2) {
-    let sum = 0;
-    for (let i = 0; i < descriptor1.length; i++) {
-        sum += Math.pow(descriptor1[i] - descriptor2[i], 2);
+/**
+ * Extract face descriptor from an image (single face only)
+ * Used for backward compatibility
+ */
+async function extractSingleFaceDescriptor(imageBuffer) {
+    const result = await extractAllFaceDescriptors(imageBuffer);
+    
+    if (result.count === 0) {
+        throw new Error('No face detected in the image');
     }
-    const distance = Math.sqrt(sum);
-    const similarity = Math.max(0, 1 - (distance / 1.4));
-    return Math.min(1, similarity);
+    
+    if (result.count > 1) {
+        throw new Error('Multiple faces detected. Please provide an image with only one face.');
+    }
+    
+    return result.descriptors[0];
+}
+
+/**
+ * Calculate match percentage from distance
+ */
+function calculateMatchPercentage(distance) {
+    if (distance === Infinity || distance > FACE_MATCH_THRESHOLD) {
+        return 0;
+    }
+    const percentage = Math.round((1 - distance / FACE_MATCH_THRESHOLD) * 100);
+    return Math.max(0, Math.min(100, percentage));
+}
+
+/**
+ * Compare a face descriptor against multiple gallery descriptors
+ * Returns the best match with distance and percentage
+ */
+function compareFaceAgainstGallery(targetDescriptor, galleryDescriptors) {
+    let bestDistance = Infinity;
+    let bestMatchIndex = -1;
+
+    // Ensure galleryDescriptors is an array (support both old and new format)
+    const descriptorsArray = Array.isArray(galleryDescriptors) ? galleryDescriptors : [galleryDescriptors];
+
+    for (let i = 0; i < descriptorsArray.length; i++) {
+        const galleryDesc = descriptorsArray[i];
+        if (!galleryDesc || !Array.isArray(galleryDesc) || galleryDesc.length === 0) continue;
+        
+        try {
+            const distance = faceapi.euclideanDistance(targetDescriptor, galleryDesc);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                bestMatchIndex = i;
+            }
+        } catch (error) {
+            console.warn('Error calculating distance:', error.message);
+            continue;
+        }
+    }
+
+    return {
+        distance: bestDistance,
+        matchPercentage: calculateMatchPercentage(bestDistance),
+        isMatch: bestDistance < FACE_MATCH_THRESHOLD && bestDistance !== Infinity
+    };
 }
 
 // ==================== API ROUTES ====================
@@ -413,13 +472,21 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
       uploadStream.end(req.file.buffer);
     });
 
-    let faceDescriptor = null;
+    let faceDescriptors = null;
+    let hasFace = false;
+
     if (faceDetectionModelLoaded) {
       try {
-        faceDescriptor = await extractFaceDescriptor(req.file.buffer);
-        console.log('✅ Face descriptor extracted successfully');
+        const extractionResult = await extractAllFaceDescriptors(req.file.buffer);
+        if (extractionResult.count > 0) {
+          faceDescriptors = extractionResult.descriptors;
+          hasFace = true;
+          console.log(`✅ ${extractionResult.count} face(s) detected and stored`);
+        } else {
+          console.warn('⚠️ No face detected in image');
+        }
       } catch (faceError) {
-        console.warn('⚠️ No face detected:', faceError.message);
+        console.warn('⚠️ Face detection error:', faceError.message);
       }
     }
 
@@ -428,11 +495,11 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
       publicId: result.public_id,
       title: req.body.title || 'Image',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      hasFace: faceDescriptor !== null
+      hasFace: hasFace
     };
 
-    if (faceDescriptor) {
-      imageData.faceDescriptor = faceDescriptor;
+    if (faceDescriptors && faceDescriptors.length > 0) {
+      imageData.faceDescriptors = faceDescriptors;
     }
 
     const docRef = await db.collection('gallery').add(imageData);
@@ -443,8 +510,8 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
       url: result.secure_url,
       publicId: result.public_id,
       title: imageData.title,
-      hasFace: faceDescriptor !== null,
-      faceDetected: faceDescriptor !== null
+      hasFace: hasFace,
+      facesDetected: faceDescriptors ? faceDescriptors.length : 0
     });
   } catch (error) {
     console.error('Error uploading image:', error);
@@ -480,19 +547,33 @@ app.delete('/api/gallery/:id', authenticateToken, async (req, res) => {
 app.get('/api/face-descriptors', async (req, res) => {
   try {
     const snapshot = await db.collection('gallery')
-      .select('url', 'faceDescriptor', 'title')
+      .select('url', 'faceDescriptors', 'faceDescriptor', 'title')
       .get();
     
     const faceData = [];
     snapshot.forEach(doc => {
       const data = doc.data();
-      if (data.faceDescriptor && data.faceDescriptor.length > 0) {
-        faceData.push({
-          id: doc.id,
-          url: data.url,
-          title: data.title || 'Image',
-          faceDescriptor: data.faceDescriptor
-        });
+      
+      // Support both old (faceDescriptor) and new (faceDescriptors) format
+      let descriptors = data.faceDescriptors || data.faceDescriptor;
+      
+      if (descriptors) {
+        // Ensure it's an array
+        if (!Array.isArray(descriptors)) {
+          descriptors = [descriptors];
+        }
+        
+        // Filter out invalid descriptors
+        const validDescriptors = descriptors.filter(d => d && Array.isArray(d) && d.length > 0);
+        
+        if (validDescriptors.length > 0) {
+          faceData.push({
+            id: doc.id,
+            url: data.url,
+            title: data.title || 'Image',
+            faceDescriptors: validDescriptors
+          });
+        }
       }
     });
     
@@ -509,14 +590,23 @@ app.post('/api/face/extract', authenticateToken, upload.single('image'), async (
   }
 
   try {
-    const descriptor = await extractFaceDescriptor(req.file.buffer);
+    const extractionResult = await extractAllFaceDescriptors(req.file.buffer);
+    
+    if (extractionResult.count === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'No face detected in the image' 
+      });
+    }
+    
     res.json({ 
       success: true, 
-      descriptor: descriptor,
-      message: 'Face descriptor extracted successfully'
+      descriptors: extractionResult.descriptors,
+      facesDetected: extractionResult.count,
+      message: `Face descriptor(s) extracted successfully (${extractionResult.count} face(s) found)`
     });
   } catch (error) {
-    console.error('Error extracting face descriptor:', error);
+    console.error('Error extracting face descriptors:', error);
     res.status(400).json({ 
       success: false, 
       message: error.message 
@@ -537,35 +627,78 @@ app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
       });
     }
 
-    const targetDescriptor = await extractFaceDescriptor(req.file.buffer);
+    // Detect all faces in the uploaded image
+    const extractionResult = await extractAllFaceDescriptors(req.file.buffer);
     
+    // Check if exactly one face is present
+    if (extractionResult.count === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No face detected in the image.'
+      });
+    }
+    
+    if (extractionResult.count > 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please upload a photo containing only one face.'
+      });
+    }
+
+    const targetDescriptor = extractionResult.descriptors[0];
+    
+    // Fetch all gallery images with face data
     const snapshot = await db.collection('gallery')
-      .select('url', 'faceDescriptor', 'title')
+      .select('url', 'faceDescriptors', 'faceDescriptor', 'title')
       .get();
     
     const matches = [];
+    
     snapshot.forEach(doc => {
       const data = doc.data();
-      if (data.faceDescriptor && data.faceDescriptor.length > 0) {
-        const similarity = compareFaces(targetDescriptor, data.faceDescriptor);
-        if (similarity > 0.65) {
-          matches.push({
-            id: doc.id,
-            url: data.url,
-            title: data.title || 'Image',
-            similarity: Math.round(similarity * 100) / 100
-          });
-        }
+      
+      // Support both old (faceDescriptor) and new (faceDescriptors) format
+      let galleryDescriptors = data.faceDescriptors || data.faceDescriptor;
+      
+      if (!galleryDescriptors) {
+        return;
+      }
+      
+      // Ensure it's an array
+      if (!Array.isArray(galleryDescriptors)) {
+        galleryDescriptors = [galleryDescriptors];
+      }
+      
+      // Filter out invalid descriptors
+      const validDescriptors = galleryDescriptors.filter(d => d && Array.isArray(d) && d.length > 0);
+      
+      if (validDescriptors.length === 0) {
+        return;
+      }
+      
+      // Compare with all descriptors in the gallery image
+      const comparisonResult = compareFaceAgainstGallery(targetDescriptor, validDescriptors);
+      
+      if (comparisonResult.isMatch) {
+        matches.push({
+          id: doc.id,
+          url: data.url,
+          title: data.title || 'Image',
+          distance: Math.round(comparisonResult.distance * 10000) / 10000,
+          matchPercentage: comparisonResult.matchPercentage
+        });
       }
     });
 
-    matches.sort((a, b) => b.similarity - a.similarity);
+    // Sort results by distance (ascending - closest match first)
+    matches.sort((a, b) => a.distance - b.distance);
 
     res.json({
       success: true,
       matches: matches,
       count: matches.length,
-      message: matches.length > 0 ? 'Faces found!' : 'No matching faces found'
+      threshold: FACE_MATCH_THRESHOLD,
+      message: matches.length > 0 ? `${matches.length} matching face(s) found!` : 'No matching faces found.'
     });
   } catch (error) {
     console.error('Error searching for faces:', error);
@@ -667,6 +800,7 @@ loadFaceModels().then(() => {
     console.log(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🧠 Face Recognition: ${faceDetectionModelLoaded ? '✅ Enabled' : '❌ Disabled'}`);
     console.log(`🧮 TensorFlow: ${tf.version_core || 'unknown'}`);
+    console.log(`🎯 Face Match Threshold: ${FACE_MATCH_THRESHOLD}`);
     console.log('=================================');
     console.log('📹 Video upload limit: 500MB');
     console.log('=================================');
