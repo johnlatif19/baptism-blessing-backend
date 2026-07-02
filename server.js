@@ -59,7 +59,8 @@ const requiredEnvVars = [
   'CLOUDINARY_API_SECRET',
   'FIREBASE_CONFIG',
   'ADMIN_USERNAME',
-  'ADMIN_PASSWORD'
+  'ADMIN_PASSWORD',
+  'FACE_MATCH_THRESHOLD'
 ];
 
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
@@ -608,7 +609,6 @@ app.post('/api/face/extract', authenticateToken, upload.single('image'), async (
   }
 });
 
-// ✅✅✅ ENDPOINT البحث المعدل ✅✅✅
 app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ message: 'No image file provided' });
@@ -627,18 +627,17 @@ app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
     // استخراج الوجوه من صورة البحث (يجب أن تكون فردية)
     const extractionResult = await extractAllFaceDescriptors(req.file.buffer);
     
-    // ✅ التحقق: يجب أن يكون وجه واحد فقط في صورة البحث
     if (extractionResult.count === 0) {
       return res.status(400).json({
         success: false,
-        message: '⚠️ No face detected in the image. Please upload a clear photo with one face.'
+        message: 'لم يتم الكشف عن أي وجه في الصورة. يرجى تحميل صورة واضحة بوجه واحد.'
       });
     }
     
     if (extractionResult.count > 1) {
       return res.status(400).json({
         success: false,
-        message: '⚠️ Please upload a photo containing only ONE face for search.'
+        message: 'يرجى تحميل صورة تحتوي على وجه واحد فقط للبحث.'
       });
     }
 
