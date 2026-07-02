@@ -265,7 +265,7 @@ function compareFaces(descriptor1, descriptor2) {
         sum += Math.pow(descriptor1[i] - descriptor2[i], 2);
     }
     const distance = Math.sqrt(sum);
-    const similarity = Math.max(0, 1 - (distance / 1.5));
+    const similarity = Math.max(0, 1 - (distance / 1.8));
     return Math.min(1, similarity);
 }
 
@@ -548,7 +548,7 @@ app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
       const data = doc.data();
       if (data.faceDescriptor && data.faceDescriptor.length > 0) {
         const similarity = compareFaces(targetDescriptor, data.faceDescriptor);
-        if (similarity > 0.6) {
+        if (similarity > 0.5) {
           matches.push({
             id: doc.id,
             url: data.url,
