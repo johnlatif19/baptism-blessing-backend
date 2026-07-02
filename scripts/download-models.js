@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 
-const modelsDir = path.join(__dirname, 'models');
+const modelsDir = path.join(__dirname, '..', 'models');
 
 // Create models directory if it doesn't exist
 if (!fs.existsSync(modelsDir)) {
@@ -47,7 +47,6 @@ async function downloadModels() {
         const url = baseUrl + model;
         const dest = path.join(modelsDir, model);
         
-        // Check if file already exists
         if (fs.existsSync(dest)) {
             console.log(`⏭️  ${model} already exists, skipping`);
             continue;
