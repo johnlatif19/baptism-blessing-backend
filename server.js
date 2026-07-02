@@ -492,7 +492,11 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
         console.log('🔍 Detecting faces in image...');
         const extractionResult = await extractAllFaceDescriptors(req.file.buffer);
         if (extractionResult.count > 0) {
-          faceDescriptors = extractionResult.descriptors;
+          // ✅ تحويل المصفوفة المتداخلة إلى مصفوفة من الكائنات لتجنب مشكلة Nested Arrays في Firestore
+          faceDescriptors = extractionResult.descriptors.map((desc, index) => ({
+            id: `face_${index + 1}`,
+            descriptor: desc
+          }));
           hasFace = true;
           console.log(`✅ ${extractionResult.count} face(s) detected and stored`);
         } else {
@@ -514,6 +518,7 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
       hasFace: hasFace
     };
 
+    // ✅ تخزين الـ faceDescriptors ككائنات بدلاً من مصفوفات متداخلة
     if (faceDescriptors && faceDescriptors.length > 0) {
       imageData.faceDescriptors = faceDescriptors;
     }
@@ -585,8 +590,16 @@ app.get('/api/face-descriptors', async (req, res) => {
           descriptors = [descriptors];
         }
         
-        // Filter out invalid descriptors
-        const validDescriptors = descriptors.filter(d => d && Array.isArray(d) && d.length > 0);
+        // ✅ استخراج الـ descriptor من الكائنات المخزنة
+        let validDescriptors = [];
+        for (const desc of descriptors) {
+          if (desc && typeof desc === 'object' && desc.descriptor && Array.isArray(desc.descriptor) && desc.descriptor.length > 0) {
+            validDescriptors.push(desc.descriptor);
+          } else if (Array.isArray(desc) && desc.length > 0) {
+            // دعم الصيغة القديمة
+            validDescriptors.push(desc);
+          }
+        }
         
         if (validDescriptors.length > 0) {
           faceData.push({
@@ -693,8 +706,16 @@ app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
         galleryDescriptors = [galleryDescriptors];
       }
       
-      // Filter out invalid descriptors
-      const validDescriptors = galleryDescriptors.filter(d => d && Array.isArray(d) && d.length > 0);
+      // ✅ استخراج الـ descriptor من الكائنات المخزنة
+      let validDescriptors = [];
+      for (const desc of galleryDescriptors) {
+        if (desc && typeof desc === 'object' && desc.descriptor && Array.isArray(desc.descriptor) && desc.descriptor.length > 0) {
+          validDescriptors.push(desc.descriptor);
+        } else if (Array.isArray(desc) && desc.length > 0) {
+          // دعم الصيغة القديمة
+          validDescriptors.push(desc);
+        }
+      }
       
       if (validDescriptors.length === 0) {
         return;
