@@ -119,21 +119,42 @@ app.use(helmet({
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "https://res.cloudinary.com", "https://api.qrserver.com"],
       frameSrc: ["'self'", "https://www.google.com", "https://www.youtube.com"],
-      connectSrc: ["'self'"],
+      connectSrc: ["'self'", "https://baptism-blessing-backend.up.railway.app"],
     },
   },
   crossOriginEmbedderPolicy: false
 }));
 
 // CORS
+// CORS - عدل القسم ده
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? ['https://baptism-blessing.vercel.app', 'https://*.vercel.app']
-    : ['http://localhost:3000', 'http://localhost:5500', 'http://127.0.0.1:5500'],
+  origin: function (origin, callback) {
+    const allowedOrigins = [
+      'https://baptism-blessing.vercel.app',
+      'https://*.vercel.app',
+      'https://baptism-blessing-backend.up.railway.app',
+      'http://localhost:3000',
+      'http://localhost:5500'
+    ];
+    
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.some(allowed => origin.includes(allowed.replace('*.', '')))) {
+      callback(null, true);
+    } else {
+      console.log('❌ CORS blocked:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Authorization']
 }));
+
+// Handle preflight requests
+app.options('*', cors());
 
 // Compression
 app.use(compression());
