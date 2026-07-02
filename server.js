@@ -30,6 +30,22 @@ let faceDetectionModelLoaded = false;
 // Face match threshold - easy to adjust
 const FACE_MATCH_THRESHOLD = Number(process.env.FACE_MATCH_THRESHOLD || 0.6);
 
+// ==================== HELPER: Convert array to base64 string ====================
+function descriptorsToBase64(descriptors) {
+    // Convert array of arrays to JSON string, then to base64
+    const jsonString = JSON.stringify(descriptors);
+    return Buffer.from(jsonString).toString('base64');
+}
+
+function base64ToDescriptors(base64String) {
+    try {
+        const jsonString = Buffer.from(base64String, 'base64').toString('utf-8');
+        return JSON.parse(jsonString);
+    } catch (e) {
+        return null;
+    }
+}
+
 // Load face detection models on startup
 async function loadFaceModels() {
     try {
@@ -59,8 +75,7 @@ const requiredEnvVars = [
   'CLOUDINARY_API_SECRET',
   'FIREBASE_CONFIG',
   'ADMIN_USERNAME',
-  'ADMIN_PASSWORD',
-  'FACE_MATCH_THRESHOLD'
+  'ADMIN_PASSWORD'
 ];
 
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
@@ -282,7 +297,6 @@ function compareFaceAgainstGallery(targetDescriptor, galleryDescriptors) {
     let bestDistance = Infinity;
     let bestMatchIndex = -1;
 
-    // Ensure galleryDescriptors is an array
     const descriptorsArray = Array.isArray(galleryDescriptors) ? galleryDescriptors : [galleryDescriptors];
 
     for (let i = 0; i < descriptorsArray.length; i++) {
@@ -465,7 +479,8 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
 
     console.log('✅ Cloudinary upload successful');
 
-    let faceDescriptors = null;
+    let faceDescriptorsBase64 = null;
+    let faceCount = 0;
     let hasFace = false;
 
     // Try to detect faces
@@ -474,10 +489,11 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
         console.log('🔍 Detecting faces in image...');
         const extractionResult = await extractAllFaceDescriptors(req.file.buffer);
         if (extractionResult.count > 0) {
-          // ✅ تخزين المصفوفات مباشرة بدون كائنات
-          faceDescriptors = extractionResult.descriptors;
+          // ✅ تخزين الـ descriptors كـ Base64 string
+          faceDescriptorsBase64 = descriptorsToBase64(extractionResult.descriptors);
+          faceCount = extractionResult.count;
           hasFace = true;
-          console.log(`✅ ${extractionResult.count} face(s) detected and stored`);
+          console.log(`✅ ${extractionResult.count} face(s) detected and stored as Base64`);
         } else {
           console.warn('⚠️ No face detected in image');
         }
@@ -494,12 +510,13 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
       publicId: result.public_id,
       title: req.body.title || 'Image',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      hasFace: hasFace
+      hasFace: hasFace,
+      faceCount: faceCount
     };
 
-    // ✅ تخزين الـ faceDescriptors كمصفوفة عادية
-    if (faceDescriptors && faceDescriptors.length > 0) {
-      imageData.faceDescriptors = faceDescriptors;
+    // ✅ تخزين الـ faceDescriptors كـ Base64 string
+    if (faceDescriptorsBase64) {
+      imageData.faceDescriptorsBase64 = faceDescriptorsBase64;
     }
 
     // Save to Firestore
@@ -514,7 +531,7 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
       publicId: result.public_id,
       title: imageData.title,
       hasFace: hasFace,
-      facesDetected: faceDescriptors ? faceDescriptors.length : 0
+      facesDetected: faceCount
     });
   } catch (error) {
     console.error('❌ Error uploading image:', error);
@@ -553,22 +570,26 @@ app.delete('/api/gallery/:id', authenticateToken, async (req, res) => {
 app.get('/api/face-descriptors', async (req, res) => {
   try {
     const snapshot = await db.collection('gallery')
-      .select('url', 'faceDescriptors', 'title')
+      .select('url', 'faceDescriptorsBase64', 'faceCount', 'title')
       .get();
     
     const faceData = [];
     snapshot.forEach(doc => {
       const data = doc.data();
-      const descriptors = data.faceDescriptors;
+      const base64Data = data.faceDescriptorsBase64;
       
-      if (descriptors && Array.isArray(descriptors) && descriptors.length > 0) {
-        // ✅ استخدم المصفوفة كما هي
-        faceData.push({
-          id: doc.id,
-          url: data.url,
-          title: data.title || 'Image',
-          faceDescriptors: descriptors
-        });
+      if (base64Data && typeof base64Data === 'string') {
+        // ✅ تحويل من Base64 إلى مصفوفة
+        const descriptors = base64ToDescriptors(base64Data);
+        if (descriptors && Array.isArray(descriptors) && descriptors.length > 0) {
+          faceData.push({
+            id: doc.id,
+            url: data.url,
+            title: data.title || 'Image',
+            faceDescriptors: descriptors,
+            faceCount: data.faceCount || descriptors.length
+          });
+        }
       }
     });
     
@@ -630,14 +651,14 @@ app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
     if (extractionResult.count === 0) {
       return res.status(400).json({
         success: false,
-        message: 'لم يتم الكشف عن أي وجه في الصورة. يرجى تحميل صورة واضحة بوجه واحد.'
+        message: '⚠️ لم يتم الكشف عن أي وجه في الصورة. يرجى تحميل صورة واضحة بوجه واحد.'
       });
     }
     
     if (extractionResult.count > 1) {
       return res.status(400).json({
         success: false,
-        message: 'يرجى تحميل صورة تحتوي على وجه واحد فقط للبحث.'
+        message: '⚠️ يرجى تحميل صورة تحتوي على وجه واحد فقط للبحث.'
       });
     }
 
@@ -645,15 +666,21 @@ app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
     
     // جلب كل الصور من المعرض
     const snapshot = await db.collection('gallery')
-      .select('url', 'faceDescriptors', 'title')
+      .select('url', 'faceDescriptorsBase64', 'faceCount', 'title')
       .get();
     
     const matches = [];
     
     snapshot.forEach(doc => {
       const data = doc.data();
-      let galleryDescriptors = data.faceDescriptors;
+      const base64Data = data.faceDescriptorsBase64;
       
+      if (!base64Data || typeof base64Data !== 'string') {
+        return;
+      }
+      
+      // ✅ تحويل من Base64 إلى مصفوفة
+      const galleryDescriptors = base64ToDescriptors(base64Data);
       if (!galleryDescriptors || !Array.isArray(galleryDescriptors) || galleryDescriptors.length === 0) {
         return;
       }
