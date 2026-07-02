@@ -720,6 +720,35 @@ app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
   }
 });
 
+// Debug endpoint
+app.get('/api/debug/faces', async (req, res) => {
+  try {
+    const snapshot = await db.collection('gallery')
+      .select('url', 'faceDescriptorsBase64', 'faceCount', 'hasFace', 'title')
+      .get();
+    
+    const result = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      result.push({
+        id: doc.id,
+        url: data.url,
+        title: data.title,
+        hasFace: data.hasFace || false,
+        faceCount: data.faceCount || 0,
+        hasBase64: !!(data.faceDescriptorsBase64)
+      });
+    });
+    
+    res.json({
+      total: result.length,
+      images: result
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ==================== VIDEO ROUTES ====================
 
 app.get('/api/videos', async (req, res) => {
