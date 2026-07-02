@@ -28,7 +28,7 @@ faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 let faceDetectionModelLoaded = false;
 
 // Face match threshold - easy to adjust
-const FACE_MATCH_THRESHOLD = Number(process.env.FACE_MATCH_THRESHOLD || 0.43);
+const FACE_MATCH_THRESHOLD = Number(process.env.FACE_MATCH_THRESHOLD || 0.6);
 
 // Load face detection models on startup
 async function loadFaceModels() {
@@ -263,24 +263,6 @@ async function extractAllFaceDescriptors(imageBuffer) {
 }
 
 /**
- * Extract face descriptor from an image (single face only)
- * Used for search endpoint
- */
-async function extractSingleFaceDescriptor(imageBuffer) {
-    const result = await extractAllFaceDescriptors(imageBuffer);
-    
-    if (result.count === 0) {
-        throw new Error('No face detected in the image');
-    }
-    
-    if (result.count > 1) {
-        throw new Error('Multiple faces detected. Please provide an image with only one face.');
-    }
-    
-    return result.descriptors[0];
-}
-
-/**
  * Calculate match percentage from distance
  */
 function calculateMatchPercentage(distance) {
@@ -299,7 +281,7 @@ function compareFaceAgainstGallery(targetDescriptor, galleryDescriptors) {
     let bestDistance = Infinity;
     let bestMatchIndex = -1;
 
-    // Ensure galleryDescriptors is an array (support both old and new format)
+    // Ensure galleryDescriptors is an array
     const descriptorsArray = Array.isArray(galleryDescriptors) ? galleryDescriptors : [galleryDescriptors];
 
     for (let i = 0; i < descriptorsArray.length; i++) {
@@ -447,7 +429,6 @@ app.get('/api/gallery', async (req, res) => {
 });
 
 app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, res) => {
-  // ✅ التحقق من وجود المستخدم
   if (!req.user) {
     console.error('❌ No user found in request');
     return res.status(401).json({ message: 'Authentication failed' });
@@ -492,11 +473,8 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
         console.log('🔍 Detecting faces in image...');
         const extractionResult = await extractAllFaceDescriptors(req.file.buffer);
         if (extractionResult.count > 0) {
-          // ✅ تحويل المصفوفة المتداخلة إلى مصفوفة من الكائنات لتجنب مشكلة Nested Arrays في Firestore
-          faceDescriptors = extractionResult.descriptors.map((desc, index) => ({
-            id: `face_${index + 1}`,
-            descriptor: desc
-          }));
+          // ✅ تخزين المصفوفات مباشرة بدون كائنات
+          faceDescriptors = extractionResult.descriptors;
           hasFace = true;
           console.log(`✅ ${extractionResult.count} face(s) detected and stored`);
         } else {
@@ -518,7 +496,7 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
       hasFace: hasFace
     };
 
-    // ✅ تخزين الـ faceDescriptors ككائنات بدلاً من مصفوفات متداخلة
+    // ✅ تخزين الـ faceDescriptors كمصفوفة عادية
     if (faceDescriptors && faceDescriptors.length > 0) {
       imageData.faceDescriptors = faceDescriptors;
     }
@@ -574,41 +552,22 @@ app.delete('/api/gallery/:id', authenticateToken, async (req, res) => {
 app.get('/api/face-descriptors', async (req, res) => {
   try {
     const snapshot = await db.collection('gallery')
-      .select('url', 'faceDescriptors', 'faceDescriptor', 'title')
+      .select('url', 'faceDescriptors', 'title')
       .get();
     
     const faceData = [];
     snapshot.forEach(doc => {
       const data = doc.data();
+      const descriptors = data.faceDescriptors;
       
-      // Support both old (faceDescriptor) and new (faceDescriptors) format
-      let descriptors = data.faceDescriptors || data.faceDescriptor;
-      
-      if (descriptors) {
-        // Ensure it's an array
-        if (!Array.isArray(descriptors)) {
-          descriptors = [descriptors];
-        }
-        
-        // ✅ استخراج الـ descriptor من الكائنات المخزنة
-        let validDescriptors = [];
-        for (const desc of descriptors) {
-          if (desc && typeof desc === 'object' && desc.descriptor && Array.isArray(desc.descriptor) && desc.descriptor.length > 0) {
-            validDescriptors.push(desc.descriptor);
-          } else if (Array.isArray(desc) && desc.length > 0) {
-            // دعم الصيغة القديمة
-            validDescriptors.push(desc);
-          }
-        }
-        
-        if (validDescriptors.length > 0) {
-          faceData.push({
-            id: doc.id,
-            url: data.url,
-            title: data.title || 'Image',
-            faceDescriptors: validDescriptors
-          });
-        }
+      if (descriptors && Array.isArray(descriptors) && descriptors.length > 0) {
+        // ✅ استخدم المصفوفة كما هي
+        faceData.push({
+          id: doc.id,
+          url: data.url,
+          title: data.title || 'Image',
+          faceDescriptors: descriptors
+        });
       }
     });
     
@@ -649,6 +608,7 @@ app.post('/api/face/extract', authenticateToken, upload.single('image'), async (
   }
 });
 
+// ✅✅✅ ENDPOINT البحث المعدل ✅✅✅
 app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ message: 'No image file provided' });
@@ -664,65 +624,43 @@ app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
 
     console.log('🔍 Processing face search...');
 
-    // Detect all faces in the uploaded image
+    // استخراج الوجوه من صورة البحث (يجب أن تكون فردية)
     const extractionResult = await extractAllFaceDescriptors(req.file.buffer);
     
-    // Check if exactly one face is present
+    // ✅ التحقق: يجب أن يكون وجه واحد فقط في صورة البحث
     if (extractionResult.count === 0) {
       return res.status(400).json({
         success: false,
-        message: 'No face detected in the image.'
+        message: '⚠️ No face detected in the image. Please upload a clear photo with one face.'
       });
     }
     
     if (extractionResult.count > 1) {
       return res.status(400).json({
         success: false,
-        message: 'Please upload a photo containing only one face.'
+        message: '⚠️ Please upload a photo containing only ONE face for search.'
       });
     }
 
     const targetDescriptor = extractionResult.descriptors[0];
     
-    // Fetch all gallery images with face data
+    // جلب كل الصور من المعرض
     const snapshot = await db.collection('gallery')
-      .select('url', 'faceDescriptors', 'faceDescriptor', 'title')
+      .select('url', 'faceDescriptors', 'title')
       .get();
     
     const matches = [];
     
     snapshot.forEach(doc => {
       const data = doc.data();
+      let galleryDescriptors = data.faceDescriptors;
       
-      // Support both old (faceDescriptor) and new (faceDescriptors) format
-      let galleryDescriptors = data.faceDescriptors || data.faceDescriptor;
-      
-      if (!galleryDescriptors) {
+      if (!galleryDescriptors || !Array.isArray(galleryDescriptors) || galleryDescriptors.length === 0) {
         return;
       }
       
-      // Ensure it's an array
-      if (!Array.isArray(galleryDescriptors)) {
-        galleryDescriptors = [galleryDescriptors];
-      }
-      
-      // ✅ استخراج الـ descriptor من الكائنات المخزنة
-      let validDescriptors = [];
-      for (const desc of galleryDescriptors) {
-        if (desc && typeof desc === 'object' && desc.descriptor && Array.isArray(desc.descriptor) && desc.descriptor.length > 0) {
-          validDescriptors.push(desc.descriptor);
-        } else if (Array.isArray(desc) && desc.length > 0) {
-          // دعم الصيغة القديمة
-          validDescriptors.push(desc);
-        }
-      }
-      
-      if (validDescriptors.length === 0) {
-        return;
-      }
-      
-      // Compare with all descriptors in the gallery image
-      const comparisonResult = compareFaceAgainstGallery(targetDescriptor, validDescriptors);
+      // ✅ جميع الوجوه في الصورة جاهزة للمقارنة
+      const comparisonResult = compareFaceAgainstGallery(targetDescriptor, galleryDescriptors);
       
       if (comparisonResult.isMatch) {
         matches.push({
@@ -735,7 +673,7 @@ app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
       }
     });
 
-    // Sort results by distance (ascending - closest match first)
+    // ترتيب النتائج (الأقرب أولاً)
     matches.sort((a, b) => a.distance - b.distance);
 
     console.log(`✅ Search complete: ${matches.length} matches found`);
@@ -745,7 +683,7 @@ app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
       matches: matches,
       count: matches.length,
       threshold: FACE_MATCH_THRESHOLD,
-      message: matches.length > 0 ? `${matches.length} matching face(s) found!` : 'No matching faces found.'
+      message: matches.length > 0 ? `✅ ${matches.length} matching face(s) found!` : '❌ No matching faces found.'
     });
   } catch (error) {
     console.error('Error searching for faces:', error);
