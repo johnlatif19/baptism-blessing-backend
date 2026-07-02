@@ -17,17 +17,20 @@ RUN apt-get update && apt-get install -y \
 # Create app directory
 WORKDIR /app
 
+# ✅ Create scripts directory first
+RUN mkdir -p scripts
+
+# ✅ Copy download script before installing
+COPY scripts/download-models.js scripts/
+
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Install dependencies (postinstall will run download-models.js)
 RUN npm install --production=false
 
 # Copy app source
 COPY . .
-
-# Download face models
-RUN npm run postinstall
 
 # Expose port
 EXPOSE 3000
