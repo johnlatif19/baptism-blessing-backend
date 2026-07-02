@@ -42,6 +42,7 @@ function downloadFile(url, dest) {
 
 async function downloadModels() {
     console.log('📦 Downloading face recognition models...');
+    console.log(`📂 Models directory: ${modelsDir}`);
     
     for (const model of models) {
         const url = baseUrl + model;
