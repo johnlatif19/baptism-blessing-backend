@@ -28,14 +28,13 @@ faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 let faceDetectionModelLoaded = false;
 
 // Face match threshold - easy to adjust
-const FACE_MATCH_THRESHOLD =
-Number(process.env.FACE_MATCH_THRESHOLD || 0.40);
+const FACE_MATCH_THRESHOLD = Number(process.env.FACE_MATCH_THRESHOLD || 0.43);
+
 // Load face detection models on startup
 async function loadFaceModels() {
     try {
         console.log('🔄 Loading face detection models from CDN...');
         
-        // ✅ استخدام CDN بدل الملفات المحلية
         const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model';
         
         await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
@@ -73,7 +72,6 @@ if (missingEnvVars.length > 0) {
 // Initialize Firebase Admin from FIREBASE_CONFIG environment variable
 let firebaseConfig;
 try {
-  // FIREBASE_CONFIG is the JSON service account key
   firebaseConfig = JSON.parse(process.env.FIREBASE_CONFIG);
   console.log('✅ Firebase config loaded successfully');
 } catch (error) {
@@ -137,7 +135,6 @@ app.use(cors({
       'http://localhost:5500'
     ];
     
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
     if (allowedOrigins.some(allowed => origin.includes(allowed.replace('*.', '')))) {
@@ -267,7 +264,7 @@ async function extractAllFaceDescriptors(imageBuffer) {
 
 /**
  * Extract face descriptor from an image (single face only)
- * Used for backward compatibility
+ * Used for search endpoint
  */
 async function extractSingleFaceDescriptor(imageBuffer) {
     const result = await extractAllFaceDescriptors(imageBuffer);
@@ -455,6 +452,9 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
   }
 
   try {
+    console.log('📤 Uploading image to Cloudinary...');
+    
+    // Upload to Cloudinary
     const result = await new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
@@ -472,11 +472,15 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
       uploadStream.end(req.file.buffer);
     });
 
+    console.log('✅ Cloudinary upload successful');
+
     let faceDescriptors = null;
     let hasFace = false;
 
+    // Try to detect faces
     if (faceDetectionModelLoaded) {
       try {
+        console.log('🔍 Detecting faces in image...');
         const extractionResult = await extractAllFaceDescriptors(req.file.buffer);
         if (extractionResult.count > 0) {
           faceDescriptors = extractionResult.descriptors;
@@ -488,8 +492,11 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
       } catch (faceError) {
         console.warn('⚠️ Face detection error:', faceError.message);
       }
+    } else {
+      console.warn('⚠️ Face detection models not loaded');
     }
 
+    // Prepare image data
     const imageData = {
       url: result.secure_url,
       publicId: result.public_id,
@@ -502,7 +509,10 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
       imageData.faceDescriptors = faceDescriptors;
     }
 
+    // Save to Firestore
+    console.log('💾 Saving to Firestore...');
     const docRef = await db.collection('gallery').add(imageData);
+    console.log('✅ Image saved to Firestore with ID:', docRef.id);
     
     res.status(201).json({ 
       message: 'Image uploaded successfully',
@@ -514,8 +524,11 @@ app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, 
       facesDetected: faceDescriptors ? faceDescriptors.length : 0
     });
   } catch (error) {
-    console.error('Error uploading image:', error);
-    res.status(500).json({ message: 'Error uploading image' });
+    console.error('❌ Error uploading image:', error);
+    res.status(500).json({ 
+      message: 'Error uploading image',
+      error: error.message 
+    });
   }
 });
 
@@ -627,6 +640,8 @@ app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
       });
     }
 
+    console.log('🔍 Processing face search...');
+
     // Detect all faces in the uploaded image
     const extractionResult = await extractAllFaceDescriptors(req.file.buffer);
     
@@ -692,6 +707,8 @@ app.post('/api/face/search', upload.single('faceImage'), async (req, res) => {
 
     // Sort results by distance (ascending - closest match first)
     matches.sort((a, b) => a.distance - b.distance);
+
+    console.log(`✅ Search complete: ${matches.length} matches found`);
 
     res.json({
       success: true,
