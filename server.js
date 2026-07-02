@@ -447,12 +447,21 @@ app.get('/api/gallery', async (req, res) => {
 });
 
 app.post('/api/gallery', authenticateToken, upload.single('image'), async (req, res) => {
+  // ✅ التحقق من وجود المستخدم
+  if (!req.user) {
+    console.error('❌ No user found in request');
+    return res.status(401).json({ message: 'Authentication failed' });
+  }
+  
+  console.log(`👤 User: ${req.user.username || req.user.role || 'Unknown'}`);
+  
   if (!req.file) {
     return res.status(400).json({ message: 'No image file provided' });
   }
 
   try {
     console.log('📤 Uploading image to Cloudinary...');
+    console.log(`📁 File: ${req.file.originalname}, Size: ${(req.file.size / 1024).toFixed(2)} KB`);
     
     // Upload to Cloudinary
     const result = await new Promise((resolve, reject) => {
